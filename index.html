@@ -18,7 +18,7 @@ small{color:#c7d2e2}
 <h1>Diagnóstico BLE MIDI</h1>
 <p>Prueba directa desde Chrome a midimittr en el iPhone.</p>
 <button id="go">Conectar Casio</button>
-<button id="inspect">Inspeccionar servicios</button>
+<button id="inspect">Inspeccionar servicios</button><button id="cccd">Inspeccionar descriptor 0x2902</button>
 <button id="off">Desconectar</button>
 <p id="state">Sin conectar</p>
 <div id="note">—</div>
@@ -28,7 +28,7 @@ small{color:#c7d2e2}
 'use strict';
 const MIDI_SERVICE='03b80e5a-ede8-4b33-a751-6ce34ec4c700';
 const MIDI_CHARACTERISTIC='7772e5db-3868-4112-a1a9-f2669d106bf3';
-let device=null, server=null;
+let device=null, server=null, characteristic=null, subscriptionPending=false;
 const out=document.querySelector('#log');
 const status=document.querySelector('#state');
 const notes=document.querySelector('#note');
@@ -67,12 +67,14 @@ document.querySelector('#go').onclick=async()=>{
    const service=await timeout(server.getPrimaryService(MIDI_SERVICE),'Consulta del servicio BLE MIDI',20000);
    step('Servicio MIDI encontrado: '+service.uuid);
    step('Buscando característica MIDI...');
-   const characteristic=await timeout(service.getCharacteristic(MIDI_CHARACTERISTIC),'Consulta de característica MIDI',20000);
+   characteristic=await timeout(service.getCharacteristic(MIDI_CHARACTERISTIC),'Consulta de característica MIDI',20000);
+   log('Propiedades: '+JSON.stringify({notify:characteristic.properties.notify,indicate:characteristic.properties.indicate,read:characteristic.properties.read,write:characteristic.properties.write,writeWithoutResponse:characteristic.properties.writeWithoutResponse}));
+   characteristic.addEventListener('characteristicvaluechanged',incoming);
    log('Característica encontrada: '+characteristic.uuid);
    step('Activando notificaciones MIDI...');
-   await timeout(characteristic.startNotifications(),'Activación de notificaciones MIDI',20000);
-   characteristic.addEventListener('characteristicvaluechanged',incoming);
-   step('Listo: toca algunas teclas del Casio.');
+   subscriptionPending=true;
+   try { await timeout(characteristic.startNotifications(),'Activación de notificaciones MIDI',20000); subscriptionPending=false;step('Notificaciones ACTIVADAS: toca el Casio.'); }
+   catch(error){subscriptionPending=false;step('Suscripción pendiente/fallida: '+error.message);log('Toca teclas igualmente para comprobar si llegan eventos.');}
  }catch(error){step('ERROR: '+(error.name||'Error')+' — '+error.message);log('Conectado actualmente: '+Boolean(device&&device.gatt&&device.gatt.connected));}
 };
 document.querySelector('#inspect').onclick=async()=>{
@@ -84,6 +86,7 @@ document.querySelector('#inspect').onclick=async()=>{
    step('Enumeración terminada ('+services.length+' servicios accesibles).');
  }catch(error){step('ERROR al inspeccionar: '+error.message);}
 };
+document.querySelector('#cccd').onclick=async()=>{try{if(!characteristic)throw Error('Primero pulsa Conectar Casio.'); log('Comprobando descriptor CCCD 0x2902...');const descriptors=await timeout(characteristic.getDescriptors(),'Enumeración de descriptores',12000);log('Descriptores visibles: '+descriptors.map(d=>d.uuid).join(', '));const d=descriptors.find(d=>d.uuid==='00002902-0000-1000-8000-00805f9b34fb');if(d){try{const value=await timeout(d.readValue(),'Lectura CCCD',12000);log('CCCD: '+[...new Uint8Array(value.buffer)].map(v=>v.toString(16).padStart(2,'0')).join(' '));}catch(e){log('No se pudo leer CCCD: '+e.message);}}step('Revisión de descriptor terminada.')}catch(e){step('ERROR descriptor: '+e.message)}};
 document.querySelector('#off').onclick=()=>{
  if(device?.gatt?.connected)device.gatt.disconnect();
  else step('No hay una conexión activa.');
