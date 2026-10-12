@@ -89,11 +89,31 @@ document.querySelector('#inspect').onclick=async()=>{
  }catch(error){step('ERROR al inspeccionar: '+error.message);}
 };
 document.querySelector('#cccd').onclick=async()=>{try{if(!characteristic)throw Error('Primero pulsa Conectar Casio.'); log('Comprobando descriptor CCCD 0x2902...');const descriptors=await timeout(characteristic.getDescriptors(),'Enumeración de descriptores',12000);log('Descriptores visibles: '+descriptors.map(d=>d.uuid).join(', '));const d=descriptors.find(d=>d.uuid==='00002902-0000-1000-8000-00805f9b34fb');if(d){try{const value=await timeout(d.readValue(),'Lectura CCCD',12000);log('CCCD: '+[...new Uint8Array(value.buffer)].map(v=>v.toString(16).padStart(2,'0')).join(' '));}catch(e){log('No se pudo leer CCCD: '+e.message);}}step('Revisión de descriptor terminada.')}catch(e){step('ERROR descriptor: '+e.message)}};
-document.querySelector('#reset').onclick=async()=>{try{if(device?.gatt?.connected)device.gatt.disconnect();let items=await navigator.bluetooth.getDevices();log('Dispositivos autorizados: '+items.map(d=>d.name||d.id).join(', '));let count=0;for(const item of items){if(item.name==='Casio'){if(typeof item.forget==='function'){await item.forget();count++;}else{log('Este Chrome no admite device.forget().');}}}device=null;server=null;characteristic=null;step('Olvidados '+count+' dispositivos Casio. Ahora vuelve a conectar.')}catch(e){step('No se pudo olvidar Casio: '+e.message)}};
+document.querySelector('#reset').onclick=async()=>{try{
+ if(!navigator.bluetooth)throw Error('Web Bluetooth no disponible.');
+ if(device?.gatt?.connected)device.gatt.disconnect();
+ let target=device;
+ if(!target && typeof navigator.bluetooth.getDevices==='function'){
+  const items=await navigator.bluetooth.getDevices();
+  target=items.find(d=>d.name==='Casio')||null;
+ }
+ if(!target){
+   step('Chrome no permite listar dispositivos autorizados. Pulsa Conectar Casio y después Olvidar Casio, o borra los permisos Bluetooth del sitio en Ajustes de Chrome.');
+   return;
+ }
+ if(typeof target.forget!=='function'){
+   step('Este Chrome no admite device.forget(). Borra el permiso Bluetooth para fer-gil.github.io desde Ajustes del sitio en Chrome.');
+   return;
+ }
+ await target.forget();
+ device=null;server=null;characteristic=null;
+ step('Permiso de Casio olvidado. Vuelve a pulsar Conectar Casio.');
+ }catch(e){step('No se pudo olvidar Casio: '+e.message)}
+};
 document.querySelector('#off').onclick=()=>{
  if(device?.gatt?.connected)device.gatt.disconnect();
  else step('No hay una conexión activa.');
 };
-log('Página de diagnóstico v4 cargada. Web Bluetooth: '+Boolean(navigator.bluetooth));
+log('Página de diagnóstico v5 cargada. Web Bluetooth: '+Boolean(navigator.bluetooth));
 </script>
 </body></html>
