@@ -1,4 +1,93 @@
-<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BLE MIDI Test</title><style>body{font:18px system-ui;background:#121826;color:white;padding:24px}button{font-size:20px;padding:16px}pre{white-space:pre-wrap;overflow-wrap:anywhere}#note{font-size:50px}</style><h1>Prueba BLE MIDI</h1><button id="go">Conectar Casio</button><button id="off">Desconectar</button><p id="state">Sin conectar</p><div id="note">—</div><pre id="log"></pre><script>
-const svc='03b80e5a-ede8-4b33-a751-6ce34ec4c700',chr='7772e5db-3868-4112-a1a9-f2669d106bf3';let dev;const log=s=>{document.querySelector('#log').textContent+=s+'\n'},state=s=>{document.querySelector('#state').textContent=s;log(s)};
-document.querySelector('#go').onclick=async()=>{try{if(!navigator.bluetooth)throw Error('Web Bluetooth no disponible. Abre desde HTTPS.');state('Buscando servicio BLE MIDI...');dev=await navigator.bluetooth.requestDevice({filters:[{services:[svc]}]});log('Encontrado: '+dev.name);dev.addEventListener('gattserverdisconnected',()=>state('Desconectado'));state('Conectando GATT...');const server=await Promise.race([dev.gatt.connect(),new Promise((_,r)=>setTimeout(()=>r(Error('GATT tardó más de 15 segundos')),15000))]);state('GATT conectado');const service=await server.getPrimaryService(svc);state('Servicio MIDI encontrado');const characteristic=await service.getCharacteristic(chr);await characteristic.startNotifications();characteristic.addEventListener('characteristicvaluechanged',e=>{const a=new Uint8Array(e.target.value.buffer,e.target.value.byteOffset,e.target.value.byteLength);log('MIDI HEX: '+Array.from(a,x=>x.toString(16).padStart(2,'0')).join(' '));for(let i=2;i<a.length-2;i++){if((a[i]&240)===144&&(a[i+1]&128)===0){let n=a[i+1],v=a[i+2],names=['Do','Do#','Re','Re#','Mi','Fa','Fa#','Sol','Sol#','La','La#','Si'];document.querySelector('#note').textContent=v?names[n%12]+(Math.floor(n/12)-1):'—';}}});state('¡Recibiendo! Toca el Casio.')}catch(e){state('ERROR '+e.name+': '+e.message)}};document.querySelector('#off').onclick=()=>dev?.gatt?.disconnect();
-</script></html>
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diagnóstico BLE MIDI — Casio</title>
+<style>
+body{font:17px/1.5 system-ui,sans-serif;background:#131927;color:#f4f7fc;max-width:700px;margin:0 auto;padding:22px}
+button{background:#e5eefc;color:#0c1930;border:0;border-radius:9px;padding:12px 15px;font-size:17px;margin:3px;cursor:pointer}
+button:disabled{opacity:.5}
+#state{background:#293448;border-radius:9px;padding:15px;font-weight:700}
+#note{font-size:48px;min-height:72px}
+pre{background:#080d16;color:#cfdfed;padding:16px;min-height:180px;white-space:pre-wrap;overflow-wrap:anywhere;border-radius:9px;font-size:13px}
+small{color:#c7d2e2}
+</style>
+</head>
+<body>
+<h1>Diagnóstico BLE MIDI</h1>
+<p>Prueba directa desde Chrome a midimittr en el iPhone.</p>
+<button id="go">Conectar Casio</button>
+<button id="inspect">Inspeccionar servicios</button>
+<button id="off">Desconectar</button>
+<p id="state">Sin conectar</p>
+<div id="note">—</div>
+<small>Registro de conexión y mensajes MIDI:</small>
+<pre id="log"></pre>
+<script>
+'use strict';
+const MIDI_SERVICE='03b80e5a-ede8-4b33-a751-6ce34ec4c700';
+const MIDI_CHARACTERISTIC='7772e5db-3868-4112-a1a9-f2669d106bf3';
+let device=null, server=null;
+const out=document.querySelector('#log');
+const status=document.querySelector('#state');
+const notes=document.querySelector('#note');
+function log(message){const time=new Date().toLocaleTimeString();out.textContent+='['+time+'] '+message+'\n';out.scrollTop=out.scrollHeight;}
+function step(message){status.textContent=message;log(message);}
+async function timeout(promise,label,ms=15000){
+ let id;
+ try{return await Promise.race([promise,new Promise((_,reject)=>{id=setTimeout(()=>reject(new Error(label+' no respondió en '+(ms/1000)+' segundos')),ms);})]);}
+ finally{clearTimeout(id);}
+}
+function incoming(event){
+ const view=event.target.value;
+ const bytes=new Uint8Array(view.buffer,view.byteOffset,view.byteLength);
+ log('MIDI HEX: '+[...bytes].map(b=>b.toString(16).padStart(2,'0')).join(' '));
+ // Interpretación básica de mensajes Note On dentro de un paquete BLE MIDI.
+ for(let i=2;i<bytes.length-2;i++){
+   const b=bytes[i];
+   if((b&0xf0)===0x90 && (bytes[i+1]&0x80)===0){
+     const note=bytes[i+1],velocity=bytes[i+2];
+     const names=['Do','Do♯','Re','Re♯','Mi','Fa','Fa♯','Sol','Sol♯','La','La♯','Si'];
+     notes.textContent=velocity?names[note%12]+(Math.floor(note/12)-1):'—';
+   }
+ }
+}
+document.querySelector('#go').onclick=async()=>{
+ try{
+   if(!navigator.bluetooth)throw new Error('Web Bluetooth no está disponible. Usa Chrome sobre HTTPS.');
+   step('Buscando servicio BLE MIDI...');
+   device=await navigator.bluetooth.requestDevice({filters:[{services:[MIDI_SERVICE]}]});
+   log('Encontrado: '+(device.name||'(sin nombre)')+' / id: '+device.id);
+   device.addEventListener('gattserverdisconnected',()=>step('Bluetooth desconectado'));
+   step('Conectando GATT...');
+   server=await timeout(device.gatt.connect(),'Conexión GATT',20000);
+   step('GATT conectado');
+   step('Consultando servicio BLE MIDI...');
+   const service=await timeout(server.getPrimaryService(MIDI_SERVICE),'Consulta del servicio BLE MIDI',20000);
+   step('Servicio MIDI encontrado: '+service.uuid);
+   step('Buscando característica MIDI...');
+   const characteristic=await timeout(service.getCharacteristic(MIDI_CHARACTERISTIC),'Consulta de característica MIDI',20000);
+   log('Característica encontrada: '+characteristic.uuid);
+   step('Activando notificaciones MIDI...');
+   await timeout(characteristic.startNotifications(),'Activación de notificaciones MIDI',20000);
+   characteristic.addEventListener('characteristicvaluechanged',incoming);
+   step('Listo: toca algunas teclas del Casio.');
+ }catch(error){step('ERROR: '+(error.name||'Error')+' — '+error.message);log('Conectado actualmente: '+Boolean(device&&device.gatt&&device.gatt.connected));}
+};
+document.querySelector('#inspect').onclick=async()=>{
+ try{
+   if(!device?.gatt?.connected)throw new Error('Conéctate primero a Casio.');
+   step('Enumerando servicios GATT autorizados...');
+   const services=await timeout(device.gatt.getPrimaryServices(),'Enumeración de servicios GATT',20000);
+   log('Servicios accesibles: '+(services.map(s=>s.uuid).join(', ')||'(ninguno)'));
+   step('Enumeración terminada ('+services.length+' servicios accesibles).');
+ }catch(error){step('ERROR al inspeccionar: '+error.message);}
+};
+document.querySelector('#off').onclick=()=>{
+ if(device?.gatt?.connected)device.gatt.disconnect();
+ else step('No hay una conexión activa.');
+};
+log('Página de diagnóstico v2 cargada. Web Bluetooth: '+Boolean(navigator.bluetooth));
+</script>
+</body></html>
